@@ -3,6 +3,43 @@ import { fetchApi } from '@libs/fetch';
 import { defaultCover } from '@libs/defaultCover';
 import { load } from 'cheerio';
 
+function sanitizeChapter(html: string, base: string): string {
+  const $ = load(html, null, false);
+  $(
+    'script,style,iframe,object,embed,svg,math,form,template,noscript',
+  ).remove();
+  const tags =
+    'p,div,span,h1,h2,h3,h4,h5,h6,br,hr,strong,em,b,i,u,s,del,small,sub,sup,blockquote,pre,code,ul,ol,li,table,thead,tbody,tfoot,tr,th,td,a,img,ruby,rt,rp'.split(
+      ',',
+    );
+  $('*').each((_, element) => {
+    const node = $(element);
+    const tag = node.prop('tagName')?.toLowerCase() || '';
+    if (!tags.includes(tag)) {
+      node.replaceWith(node.contents());
+      return;
+    }
+    const allowed = ['title'];
+    if (tag === 'a') allowed.push('href');
+    if (tag === 'img') allowed.push('src', 'alt');
+    for (const attribute of Object.keys(node.attr() || {})) {
+      if (!allowed.includes(attribute)) node.removeAttr(attribute);
+    }
+    const attribute = tag === 'a' ? 'href' : tag === 'img' ? 'src' : undefined;
+    if (attribute && node.attr(attribute)) {
+      try {
+        const url = new URL(node.attr(attribute)!, base);
+        if (url.protocol !== 'https:' && url.protocol !== 'http:')
+          node.removeAttr(attribute);
+        else node.attr(attribute, url.href);
+      } catch {
+        node.removeAttr(attribute);
+      }
+    }
+  });
+  return $.root().html() || '';
+}
+
 type Post = { URL: string; title: string; date: string };
 type Index = { found: number; posts: Post[] };
 
@@ -11,7 +48,7 @@ class Maehwasup implements Plugin.PluginBase {
   name = 'Maehwasup';
   site = 'https://maehwasup.com';
   icon = 'src/en/maehwasup/icon.png';
-  version = '1.0.0';
+  version = '1.0.1';
 
   private async request(url: string) {
     const response = await fetchApi(url);
@@ -98,9 +135,10 @@ class Maehwasup implements Plugin.PluginBase {
       )
         $(element).remove();
     });
-    if (body.text().trim().length < 200)
+    const chapter = sanitizeChapter(body.html() || '', this.resolveUrl(path));
+    if (load(chapter).text().trim().length < 200)
       throw new Error('Maehwasup: no readable public chapter was found.');
-    return body.html()!;
+    return chapter;
   }
 
   async searchNovels(term: string, page: number): Promise<Plugin.NovelItem[]> {
